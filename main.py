@@ -6,6 +6,7 @@ import os
 from urllib.parse import urlencode
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+import base64
 
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "YOUR_CLIENT_ID.apps.googleusercontent.com")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "YOUR_CLIENT_SECRET")
@@ -59,10 +60,38 @@ async def auth_callback(code: str):
 
     email_list_html = "<h1>Latest Emails</h1><ul>"
     for message in messages:
-        msg = service.users().messages().get(userId="me", id=message["id"]).execute()
+        msg = service.users().messages().get(userId="me", id=message["id"], format="full").execute()
         headers = msg.get("payload", {}).get("headers", [])
-        subject = next((h["value"] for h in headers if h["name"] == "Subject"), "(No Subject)")
-        email_list_html += f"<li>{subject}</li>"
+
+        # Extract headers
+        subject = next((h["value"] for h in headers if h["name"].lower() == "subject"), "(No Subject)")
+        sender = next((h["value"] for h in headers if h["name"].lower() == "from"), "(Unknown Sender)")
+        recipient = next((h["value"] for h in headers if h["name"].lower() == "to"), "(Unknown Recipient)")
+
+        # Extract body content
+        body = ""
+        if "parts" in msg["payload"]:
+            # multipart email - try to get the plain text part
+            for part in msg["payload"]["parts"]:
+                if part.get("mimeType") == "text/plain" and "data" in part.get("body", {}):
+                    body = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="ignore")
+                    break
+        else:
+            # single part email
+            if "data" in msg["payload"]["body"]:
+                body = base64.urlsafe_b64decode(msg["payload"]["body"]["data"]).decode("utf-8", errors="ignore")
+
+        email_list_html += f"""
+            <li>
+                <strong>From:</strong> {sender}<br>
+                <strong>To:</strong> {recipient}<br>
+                <strong>Subject:</strong> {subject}<br>
+                <strong>Body:</strong> <pre>{body}</pre>
+            </li>
+            <hr>
+        """
+
     email_list_html += "</ul>"
+
 
     return HTMLResponse(email_list_html)
